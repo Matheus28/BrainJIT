@@ -287,7 +287,7 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 	}
 	
 	if(1){
-		FILE *f = fopen("jit.out", "w+");
+		FILE *f = fopen("jit.out", "wb+");
 		fwrite(func, 1, code.size(), f);
 		fclose(f);
 	}
