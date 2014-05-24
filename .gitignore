@@ -22,3 +22,8 @@
 
 *.sdf
 *.pdb
+*.tlog
+*.log
+*.out
+*.lastbuildstate
+*.opensdf

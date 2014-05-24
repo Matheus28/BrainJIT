@@ -32,7 +32,7 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 	std::vector<size_t> openBrackets;
 
 	// int 3
-	// code.push_back(0xCC);
+	code.push_back(0xCC);
 
 	// push eax
 	code.push_back(0x50);
@@ -82,7 +82,7 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 				}
 
 				// sub byte [ebx + eax], count
-				code.push_back(0x82);
+				code.push_back(0x80);
 				code.push_back(0x2C);
 				code.push_back(0x03);
 				code.push_back(count);
@@ -275,7 +275,8 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 #ifdef _WIN32
 	func = (uint8_t*) VirtualAlloc(NULL, code.size(), MEM_COMMIT, PAGE_READWRITE);
 #else
-	#error FIX ME
+	func = (uint8_t*) mmap(NULL, code.size(), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	if(func == MAP_FAILED) return NULL;
 #endif
 
 
@@ -284,14 +285,19 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 	for(size_t off : offsetsToSubtractPos){
 		*(uintptr_t*)&func[off] -= (uintptr_t) &func[off];
 	}
+	
+	if(1){
+		FILE *f = fopen("jit.out", "w+");
+		fwrite(func, 1, code.size(), f);
+		fclose(f);
+	}
 
 #ifdef _WIN32
 	DWORD oldProtect;
 	VirtualProtect(func, code.size(), PAGE_EXECUTE_READ, &oldProtect);
 #else
-	#error FIX ME
+	mprotect(func, code.size(), PROT_EXEC | PROT_READ);
 #endif
-	
 
 	printf("Code generated has %d bytes\n", code.size());
 	return (ExecutableFunc) func;
@@ -313,12 +319,13 @@ int main(int argc, const char *argv[]){
 	size_t len = ftell(f);
 	fseek(f, 0, SEEK_SET);
 
-	char *code = (char*)malloc(len);
+	char *code = (char*)malloc(len + 1);
 
 	fread(code, 1, len, f);
+	code[len] = 0;
 
 	auto func = GenerateCode(code, len);
-	printf("EXECUTING\n================\n");
+	printf("EXECUTING\n");
 	
 	if(len < 1024){
 		printf("%s\n================\n", code);
@@ -326,7 +333,6 @@ int main(int argc, const char *argv[]){
 
 	func(memory);
 	printf("\n================\nEXECUTION ENDED\n");
-	getchar();
 
 	free(code);
 }
