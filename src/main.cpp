@@ -1,12 +1,13 @@
-
 #ifdef _WIN32
 	#define _CRT_SECURE_NO_WARNINGS
 	#include <Windows.h>
 #endif
 
+#include <omp.h>
 #include <stdio.h>
 #include <vector>
 #include <stdint.h>
+#include <memory>
 
 typedef void (*ExecutableFunc)(uint8_t *memory);
 
@@ -22,17 +23,48 @@ void PutCharWrapper(int ch){
 }
 #endif
 
+inline bool IsCodeChar(char ch){
+	switch(ch){
+	case '+':
+	case '-':
+	case '<':
+	case '>':
+	case '[':
+	case ']':
+	case '.':
+	case ',':
+		return true;
+
+	default: return false;
+	}
+}
+
 // The pointer to our memory is in ebx
 // The current pointer index is in eax
 // ecx is used sometimes as a temporary register
-ExecutableFunc GenerateCode(const char *str, size_t len){
+ExecutableFunc GenerateCode(const char *strUnfiltered, size_t lenUnfiltered){
+	size_t i;
+	size_t len = 0;
+
+	std::unique_ptr<char[]> str(new char[lenUnfiltered]);
+	{
+		for(i = 0; i < lenUnfiltered; ++i){
+			if(!IsCodeChar(strUnfiltered[i])) continue;
+			str[len++] = strUnfiltered[i];
+		}
+		str[len] = 0;
+	}
+	
+
+	i = 0;
+
 	std::vector<uint8_t> code;
 
 	std::vector<size_t> offsetsToSubtractPos;
 	std::vector<size_t> openBrackets;
 
 	// int 3
-	code.push_back(0xCC);
+	//code.push_back(0xCC);
 
 	// push eax
 	code.push_back(0x50);
@@ -55,8 +87,98 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 	code.push_back(0x00);
 	code.push_back(0x00);
 	code.push_back(0x00);
+	
 
-	for(size_t i = 0; i < len; ++i){
+	auto Matches = [&](const char *m){
+		if(strncmp(m, &str[i], strlen(m)) != 0) return false;
+		i += strlen(m);
+		return true;
+	};
+
+	auto PeekMatches = [&](const char *m){
+		return strncmp(m, &str[i], strlen(m)) != 0;
+	};
+
+
+	while(i < len){
+		if(Matches("[-]")){
+			// mov byte [ebx + eax], 0
+			code.push_back(0xC6);
+			code.push_back(0x04);
+			code.push_back(0x03);
+			code.push_back(0x00);
+			continue;
+		}
+
+		if(Matches("[->+++++<]")){
+			uint8_t multAmount = 5;
+			uint8_t registerOffset = 1;
+
+			// mov cl, [ebx + eax]
+			code.push_back(0x8A);
+			code.push_back(0x0C);
+			code.push_back(0x03);
+
+			// imul ecx, multAmount
+			code.push_back(0x6B);
+			code.push_back(0xC9);
+			code.push_back(multAmount);
+
+			// mov [ebx + eax + registerOffset], cl
+			code.push_back(0x88);
+			code.push_back(0x4C);
+			code.push_back(0x03);
+			code.push_back(registerOffset);
+
+			// mov byte [ebx + eax], 0
+			code.push_back(0xC6);
+			code.push_back(0x04);
+			code.push_back(0x03);
+			code.push_back(0x00);
+			continue;
+		}
+
+		if(PeekMatches("+>+>")){
+			size_t count = 0;
+			while(Matches("+>") && count < 8) ++count;
+			if(count > 0){
+				for(size_t j = 0; j < count; ++j){
+					// add [eax + ebx + j], 1
+					code.push_back(0x80);
+					code.push_back(0x44);
+					code.push_back(0x03);
+					code.push_back(j);
+					code.push_back(0x01);
+				}
+
+				// add eax, count
+				code.push_back(0x83);
+				code.push_back(0xC0);
+				code.push_back(count);
+			}
+		}
+
+		if(PeekMatches("->->")){
+			size_t count = 0;
+			while(Matches("->") && count < 8) ++count;
+			if(count > 0){
+				for(size_t j = 0; j < count; ++j){
+					// add [eax + ebx + j], 1
+					code.push_back(0x80);
+					code.push_back(0x6C);
+					code.push_back(0x03);
+					code.push_back(j);
+					code.push_back(0x01);
+				}
+
+				// add eax, count
+				code.push_back(0x83);
+				code.push_back(0xC0);
+				code.push_back(count);
+			}
+		}
+
+
 		switch(str[i]){
 			case '+': {
 				uint8_t count = 1;
@@ -251,6 +373,8 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 				code.push_back((jump.u >> 24) & 0xFF);
 			}; break;
 		}
+
+		++i;
 	}
 
 	if(!openBrackets.empty()){
@@ -304,16 +428,23 @@ ExecutableFunc GenerateCode(const char *str, size_t len){
 }
 
 int main(int argc, const char *argv[]){
-	uint8_t memory[2048];
+	uint8_t memory[30000];
 	memset(memory, 0, sizeof(memory));
 
+	double start, end;
 
 	if(argc < 2){
-		printf("Usage: %s filename", argv[0]);
+		printf("Usage: %s [filename]", argv[0]);
 		return 1;
 	}
 
 	FILE *f = fopen(argv[1], "rb");
+
+	if(f == NULL){
+		puts("Couldn't find file");
+		return 1;
+	}
+
 	fseek(f, 0, SEEK_END);
 	
 	size_t len = ftell(f);
@@ -324,15 +455,22 @@ int main(int argc, const char *argv[]){
 	fread(code, 1, len, f);
 	code[len] = 0;
 
+	start = omp_get_wtime();
 	auto func = GenerateCode(code, len);
-	printf("EXECUTING\n");
+	end = omp_get_wtime();
+	printf("JIT compilation took %f ms\n", int((end - start)*1000));
 	
 	if(len < 1024){
-		printf("%s\n================\n", code);
+		printf("%s\n", code);
 	}
 
+	puts("================");
+	
+	start = omp_get_wtime();
 	func(memory);
-	printf("\n================\nEXECUTION ENDED\n");
+	end = omp_get_wtime();
+
+	printf("\n================\nExecution took %d ms\n", int((end - start)*1000));
 
 	free(code);
 }
