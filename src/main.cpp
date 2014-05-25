@@ -75,7 +75,7 @@ ExecutableFunc GenerateCode(const char *strUnfiltered, size_t lenUnfiltered){
 	// push ecx
 	code.push_back(0x51);
 
-	// mov ebx, [ebp + 12]
+	// mov ebx, [ebp + 16]
 	code.push_back(0x8B);
 	code.push_back(0x5C);
 	code.push_back(0x24);
